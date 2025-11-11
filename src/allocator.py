@@ -106,7 +106,7 @@ class BudgetAllocator:
         allocated_spend = {}
 
         scores = self.get_scores(campaign_states)
-        allocated_spend = self.get_budget_from_score(scores)
+        allocated_spend = self.allocate_spend_square_normalization(scores)
 
         self.reduce_current_daily_budget(allocated_spend)
 
@@ -129,7 +129,7 @@ class BudgetAllocator:
         scores.sort(key=lambda x: x[1], reverse=True)
         return scores
 
-    def get_budget_from_score(self, scores: List[Tuple[str, float, float, float]], power: float = 3) -> Dict[str, Tuple[float, float, float]]:
+    def allocate_spend_square_normalization(self, scores: List[Tuple[str, float, float, float]], power: float = 3) -> Dict[str, Tuple[float, float, float]]:
         if not scores:
             return {}
         
@@ -148,6 +148,44 @@ class BudgetAllocator:
         for (cid, _, sampled_cpa, sample_cpc), powered_score in zip(scores, powered_scores):
             allocations[cid] = ((powered_score / total_powered_score) * hourly_budget, sampled_cpa, sample_cpc)
         
+        return allocations
+
+    def allocate_spend_normalization(self, scores: List[Tuple[str, float, float, float]]) -> Dict[str, Tuple[float, float, float]]:
+        if not scores:
+            return {cid: (0.0, 0.0, 0.0) for cid, _, _, _ in scores}
+        
+        hourly_budget = self.cfg.daily_budget / 24
+        
+        total_score = sum(score for _, score, _, _ in scores)
+        
+        if total_score < 1e-8:
+            equal_share = hourly_budget / len(scores)
+            return {cid: (equal_share, sampled_cpa, sample_cpc) for cid, _, sampled_cpa, sample_cpc in scores}
+        
+        allocations = {}
+        for cid, score, sampled_cpa, sample_cpc in scores:
+            allocations[cid] = ((score / total_score) * hourly_budget, sampled_cpa, sample_cpc)
+        
+        return allocations
+
+    def allocate_spend_weighted_round_robin(self, scores: List[Tuple[str, float, float, float]]) -> Dict[str, Tuple[float, float, float]]:
+        allocations: Dict[str, Tuple[float, float, float]] = {cid: (0.0, 0.0, 0.0) for cid, _, _, _ in scores}
+        
+        scored = scores
+        hourly_budget = self.cfg.daily_budget / 24
+        remaining = hourly_budget
+
+        i = 0
+        while remaining > 1e-6 and i < len(scored):
+            name, score, _, _ = scored[i]
+            chunk = min(remaining, max(10.0, 0.2 * hourly_budget))
+            amt = chunk * score / max(1e-8, score)
+            allocations[name] = (allocations.get(name, (0.0, 0.0, 0.0))[0] + amt, allocations.get(name, (0.0, 0.0, 0.0))[1], allocations.get(name, (0.0, 0.0, 0.0))[2])
+            remaining -= amt
+            i += 1
+            if i == len(scored):
+                i = 0
+
         return allocations
 
     def reduce_current_daily_budget(self, allocated_spend: Dict[str, Tuple[float, float, float]]):
