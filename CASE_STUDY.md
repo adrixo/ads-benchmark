@@ -1,25 +1,48 @@
-based on the exercise create a small using this structure. don't extend too much
+# Case Study – Benchmark of Allocation Algorithms
 
-# Case study
+The purpose of this exercise is to **build a benchmark** to compare different scoring and budget allocation algorithms under controlled simulated conditions.
 
-The propose of this exercise is to quickly create a benchmark to compare different score and budget allocation algorithms
+## Why
 
-why?:
-We are not certain about what estimation strategies and allocation produce the best results in terms of gain per ads.
-there are multiple variables to compare in a complex system (Variance of conversion rate per hour, cost per click, cold start values, max caps, minimum allocations, budget variation over day, exploration...) but we keep those stable to only focus on the study of allocator: score function (vs baseline) and allocation strategies 
+We aim to understand **which estimation and allocation strategies** yield the best results in ad performance.  
+Although the full system involves many interacting variables (conversion variance per hour, CPC, cold start, caps, pacing, exploration), we’ll keep these **fixed** to focus only on the **allocator behavior**:
 
-## Metrics:
-regret
-CPA
-total conversion
-pacing error
-### others to explore (out of this scope)
-volatility
-exploration share
-final profit
-cap violations
+- **Score function:** how campaigns are ranked (e.g., Thompson Sampling vs. baseline CVR)
+- **Allocation strategy:** how the hourly budget is distributed once scores are known (e.g., greedy, proportional, knapsack-like)
 
-## Simulation
-We need to detach the empiric campaign simulation from the estimation, since if not  and will be hard to reproduce, which imposibilities comparision
-- campaigns will have an empiric inner conversion/cpc
-- that empiric inner can change (measure how good algorithm adapts to change)
+---
+
+## Metrics
+
+| Metric | Description |
+|--------|--------------|
+| **Regret** | Lost conversions vs. optimal allocation |
+| **CPA (Cost per Acquisition)** | Cost per conversion achieved |
+| **Total conversions** | Overall campaign performance |
+| **Pacing error** | Deviation from planned hourly budget |
+
+**Others to explore (out of scope for now):**
+- Volatility  
+- Exploration share  
+- Final profit  
+- Cap violations  
+
+---
+
+## Simulation Design
+
+To ensure reproducibility, we **separate campaign simulation from estimation**:
+
+- **Empiric campaigns:**  
+  Each campaign has an internal “true” conversion rate and CPC used to generate synthetic outcomes (clicks, conversions).
+  
+- **Estimator / allocator:**  
+  Observes only simulated data and decides hourly spend for the next period.
+
+### Algorithms & Method
+
+TBC
+
+# Limitations
+
+The inner empiric campaign in real life can vary so results are highly dependant on the knowledge of how that works
