@@ -204,8 +204,14 @@ class Metric:
         """
         Measures regret: the difference between actual CPA and sampled CPA.
         If actual CPA is higher than sampled CPA, there's regret (we're paying more than expected).
+        Returns 0 if the campaign was not considered (score=0 due to cap violation).
         """
-        _, sampled_cpa, _ = allocated_spend
+        score, sampled_cpa, _ = allocated_spend
+        
+        # If sampled CPA exceeds cap, score would be 0 and campaign not considered
+        # In this case, regret should be 0
+        if score == 0.0:
+            return 0.0
         
         # Actual CPA achieved
         actual_cpa = campaign.cpa
