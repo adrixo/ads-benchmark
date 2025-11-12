@@ -235,7 +235,7 @@ class BudgetAllocator:
 
         return allocations
     
-    def allocate_spend_ucb_optimal(self, scores: List[Tuple[str, float, float, float]], exploration_factor: float = 0.1) -> Dict[str, float]:
+    def allocate_spend_softmax_exploration(self, scores: List[Tuple[str, float, float, float]], exploration_factor: float = 0.1) -> Dict[str, float]:
         if not scores:
             return {}
         
@@ -727,7 +727,7 @@ def run_simulation(
         'Square Norm': temp_allocator.allocate_spend_square_normalization,
         'Simple Norm': temp_allocator.allocate_spend_normalization,
         'Weighted RR': temp_allocator.allocate_spend_weighted_round_robin,
-        'UCB Optimal': temp_allocator.allocate_spend_ucb_optimal
+        'Softmax Exploration': temp_allocator.allocate_spend_softmax_exploration
     }
     
     # Store averaged results for each combination
