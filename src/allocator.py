@@ -103,7 +103,7 @@ class BudgetAllocator:
     def __init__(self, cfg: AllocatorConfig = AllocatorConfig()):
         self.cfg = cfg
 
-    def allocate_hour(self, campaign_states: List[CampaignState]) -> Dict[str, Tuple[float, float, float]]:
+    def allocate_hour(self, campaign_states: List[CampaignState]) -> Dict[str, float]:
         allocated_spend = {}
 
         scores = self.get_scores(campaign_states)
@@ -130,7 +130,7 @@ class BudgetAllocator:
         scores.sort(key=lambda x: x[1], reverse=True)
         return scores
 
-    def allocate_spend_square_normalization(self, scores: List[Tuple[str, float, float, float]], power: float = 3) -> Dict[str, Tuple[float, float, float]]:
+    def allocate_spend_square_normalization(self, scores: List[Tuple[str, float, float, float]], power: float = 3) -> Dict[str, float]:
         if not scores:
             return {}
         
@@ -143,17 +143,17 @@ class BudgetAllocator:
         
         if total_powered_score < 1e-8:
             equal_share = hourly_budget / len(scores)
-            return {cid: (equal_share, sampled_cpa, sample_cpc) for cid, _, sampled_cpa, sample_cpc in scores}
+            return {cid: equal_share for cid, _, _, _ in scores}
         
         allocations = {}
-        for (cid, _, sampled_cpa, sample_cpc), powered_score in zip(scores, powered_scores):
-            allocations[cid] = ((powered_score / total_powered_score) * hourly_budget, sampled_cpa, sample_cpc)
+        for (cid, _, _, _), powered_score in zip(scores, powered_scores):
+            allocations[cid] = (powered_score / total_powered_score) * hourly_budget
         
         return allocations
 
-    def allocate_spend_normalization(self, scores: List[Tuple[str, float, float, float]]) -> Dict[str, Tuple[float, float, float]]:
+    def allocate_spend_normalization(self, scores: List[Tuple[str, float, float, float]]) -> Dict[str, float]:
         if not scores:
-            return {cid: (0.0, 0.0, 0.0) for cid, _, _, _ in scores}
+            return {cid: 0.0 for cid, _, _, _ in scores}
         
         hourly_budget = self.cfg.daily_budget / 24
         
@@ -161,16 +161,16 @@ class BudgetAllocator:
         
         if total_score < 1e-8:
             equal_share = hourly_budget / len(scores)
-            return {cid: (equal_share, sampled_cpa, sample_cpc) for cid, _, sampled_cpa, sample_cpc in scores}
+            return {cid: equal_share for cid, _, _, _ in scores}
         
         allocations = {}
-        for cid, score, sampled_cpa, sample_cpc in scores:
-            allocations[cid] = ((score / total_score) * hourly_budget, sampled_cpa, sample_cpc)
+        for cid, score, _, _ in scores:
+            allocations[cid] = (score / total_score) * hourly_budget
         
         return allocations
 
-    def allocate_spend_weighted_round_robin(self, scores: List[Tuple[str, float, float, float]]) -> Dict[str, Tuple[float, float, float]]:
-        allocations: Dict[str, Tuple[float, float, float]] = {cid: (0.0, 0.0, 0.0) for cid, _, _, _ in scores}
+    def allocate_spend_weighted_round_robin(self, scores: List[Tuple[str, float, float, float]]) -> Dict[str, float]:
+        allocations: Dict[str, float] = {cid: 0.0 for cid, _, _, _ in scores}
         
         scored = scores
         hourly_budget = self.cfg.daily_budget / 24
@@ -181,7 +181,7 @@ class BudgetAllocator:
             name, score, _, _ = scored[i]
             chunk = min(remaining, max(10.0, 0.2 * hourly_budget))
             amt = chunk * score / max(1e-8, score)
-            allocations[name] = (allocations.get(name, (0.0, 0.0, 0.0))[0] + amt, allocations.get(name, (0.0, 0.0, 0.0))[1], allocations.get(name, (0.0, 0.0, 0.0))[2])
+            allocations[name] = allocations.get(name, 0.0) + amt
             remaining -= amt
             i += 1
             if i == len(scored):
@@ -189,8 +189,8 @@ class BudgetAllocator:
 
         return allocations
 
-    def reduce_current_daily_budget(self, allocated_spend: Dict[str, Tuple[float, float, float]]):
-        self.cfg.current_daily_budget -= sum(amount for amount, _, _ in allocated_spend.values())
+    def reduce_current_daily_budget(self, allocated_spend: Dict[str, float]):
+        self.cfg.current_daily_budget -= sum(allocated_spend.values())
 
     def restart_day(self):
         self.cfg.current_daily_budget = self.cfg.daily_budget
@@ -200,16 +200,15 @@ class Metric:
     """Individual metric calculation methods"""
     
     @staticmethod
-    def regret(allocated_spend: Tuple[float, float, float], campaign: CampaignState) -> float:
+    def regret(campaign: CampaignState, score_info: Tuple[str, float, float, float]) -> float:
         """
         Measures regret: the difference between actual CPA and sampled CPA.
         If actual CPA is higher than sampled CPA, there's regret (we're paying more than expected).
         Returns 0 if the campaign was not considered (score=0 due to cap violation).
         """
-        score, sampled_cpa, _ = allocated_spend
+        _, score, sampled_cpa, _ = score_info
         
-        # If sampled CPA exceeds cap, score would be 0 and campaign not considered
-        # In this case, regret should be 0
+        # If score is 0, campaign was not considered due to cap violation
         if score == 0.0:
             return 0.0
         
@@ -220,17 +219,17 @@ class Metric:
         return abs(actual_cpa - sampled_cpa)
     
     @staticmethod
-    def cpa(allocated_spend: Tuple[float, float, float], campaign: CampaignState) -> float:
+    def cpa(campaign: CampaignState) -> float:
         """Returns the actual Cost Per Acquisition for the campaign."""
         return campaign.cpa
     
     @staticmethod
-    def total_conversions(allocated_spend: Tuple[float, float, float], campaign: CampaignState) -> float:
+    def total_conversions(campaign: CampaignState) -> float:
         """Returns the total cumulative conversions achieved."""
         return float(campaign.cum_conversions)
     
     @staticmethod
-    def cap_violations(allocated_spend: Tuple[float, float, float], campaign: CampaignState) -> float:
+    def cap_violations(campaign: CampaignState) -> float:
         """
         Measures how much the actual CPA exceeds the cap.
         Returns 0 if within cap, otherwise returns the excess amount.
@@ -246,14 +245,14 @@ class SimulatorMetrics:
     """Aggregates metrics across campaigns"""
     
     @staticmethod
-    def calculate_metrics(campaigns: List[CampaignState], allocated_spend: Dict[str, Tuple[float, float, float]], scores: Optional[List[Tuple[str, float, float, float]]] = None) -> Dict[str, Any]:
+    def calculate_metrics(campaigns: List[CampaignState], allocated_spend: Dict[str, float], scores: List[Tuple[str, float, float, float]]) -> Dict[str, Any]:
         """
         Calculate metrics for each campaign and aggregate metrics across all campaigns.
         
         Args:
             campaigns: List of campaign states
-            allocated_spend: Dict mapping campaign_id to (spend, sampled_cpa, sample_cpc)
-            scores: Optional list of scores from get_scores (to count cap violations)
+            allocated_spend: Dict mapping campaign_id to spend amount
+            scores: List of scores from get_scores (cid, score, sampled_cpa, sample_cpc)
         
         Returns:
             Dict with structure:
@@ -277,18 +276,21 @@ class SimulatorMetrics:
         """
         per_campaign_metrics: Dict[str, Dict[str, float]] = {}
         
+        # Create a dict to quickly lookup score info by campaign_id
+        score_dict = {cid: score_info for score_info in scores for cid in [score_info[0]]}
+        
         # Calculate metrics for each campaign
         total_spend = 0.0
         total_conversions_sum = 0.0
         regrets = []
         
         for campaign in campaigns:
-            allocation = allocated_spend.get(campaign.campaign_id, (0.0, 0.0, 0.0))
+            score_info = score_dict.get(campaign.campaign_id, (campaign.campaign_id, 0.0, 0.0, 0.0))
             
-            campaign_regret = Metric.regret(allocation, campaign)
-            campaign_cpa = Metric.cpa(allocation, campaign)
-            campaign_conversions = Metric.total_conversions(allocation, campaign)
-            campaign_cap_violation = Metric.cap_violations(allocation, campaign)
+            campaign_regret = Metric.regret(campaign, score_info)
+            campaign_cpa = Metric.cpa(campaign)
+            campaign_conversions = Metric.total_conversions(campaign)
+            campaign_cap_violation = Metric.cap_violations(campaign)
             
             per_campaign_metrics[campaign.campaign_id] = {
                 'regret': campaign_regret,
@@ -318,13 +320,8 @@ class SimulatorMetrics:
         aggregate_metrics['total_conversions'] = total_conversions_sum
         
         # Cap violations: count how many campaigns have score=0 (removed due to cap)
-        if scores is not None:
-            cap_violation_count = sum(1 for _, score, _, _ in scores if score == 0.0)
-            aggregate_metrics['cap_violations'] = float(cap_violation_count)
-        else:
-            # Alternative: count campaigns where CPA exceeds cap
-            cap_violation_count = sum(1 for m in per_campaign_metrics.values() if m['cap_violations'] > 0)
-            aggregate_metrics['cap_violations'] = float(cap_violation_count)
+        cap_violation_count = sum(1 for _, score, _, _ in scores if score == 0.0)
+        aggregate_metrics['cap_violations'] = float(cap_violation_count)
         
         return {
             'per_campaign': per_campaign_metrics,
@@ -512,11 +509,11 @@ def run_simulation(
     for hour in range(simulation_hours):
         # Get scores first for cap violation tracking
         scores = allocator.get_scores(campaign_states)
-        spend_allocation: Dict[str, Tuple[float, float, float]] = allocator.allocate_spend_weighted_round_robin(scores)
+        spend_allocation: Dict[str, float] = allocator.allocate_spend_weighted_round_robin(scores)
         allocator.reduce_current_daily_budget(spend_allocation)
         
         for state in campaign_states:
-            state.simulate_next_hour(spend_allocation[state.campaign_id][0])
+            state.simulate_next_hour(spend_allocation[state.campaign_id])
 
         if hour % 24 == 0:
             allocator.restart_day()
