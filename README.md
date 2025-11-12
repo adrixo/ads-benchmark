@@ -72,13 +72,7 @@ Final benchmark comparing 2 scoring methods × 4 allocation methods across 500 i
 
 ![Algorithm Comparison](simulation_500n.png)
 
-**Key Findings**: The visualization shows which combination of scoring and allocation method achieves:
-- Lowest regret (better predictions)
-- Lowest CPA (cheaper acquisitions) 
-- Highest total conversions (best performance)
-- Fewest cap violations (more campaigns viable)
-
-Green borders indicate the winning method for each metric.
+- Even with high regret, square norm gives more conversions. Probably due to budget distribution which is not measured (more research needed)
 
 ---
 
