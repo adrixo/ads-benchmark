@@ -249,42 +249,27 @@ class BudgetAllocator:
             equal_share = hourly_budget / len(scores)
             return {cid: equal_share for cid, _, _, _ in scores}
         
-        # Calculate UCB scores: base_score + exploration_bonus
-        # Exploration bonus is based on the inverse of the score (higher uncertainty for lower scores)
         ucb_scores = []
         max_score = max(score for _, score, _, _ in valid_scores)
         
         for cid, score, cpa, cpc in valid_scores:
-            # Normalized score (0-1)
             normalized_score = score / max_score if max_score > 0 else 0
-            
-            # Exploration bonus: higher for campaigns with lower scores (more uncertainty)
-            # Uses 1/sqrt(score) as uncertainty proxy
             exploration_bonus = exploration_factor * (1.0 / np.sqrt(max(score, 1e-6)))
-            
-            # UCB = exploitation + exploration
             ucb = normalized_score + exploration_bonus
-            
             ucb_scores.append((cid, score, ucb, cpa, cpc))
         
-        # Sort by UCB score (descending)
         ucb_scores.sort(key=lambda x: x[2], reverse=True)
         
-        # Allocate budget using softmax on UCB scores for smooth distribution
-        # This gives top campaigns more budget but doesn't completely ignore others
-        temperature = 2.0  # Controls sharpness of distribution (lower = more concentrated)
+        temperature = 5.0
         ucb_values = np.array([ucb for _, _, ucb, _, _ in ucb_scores])
         
-        # Apply softmax with temperature
         exp_ucb = np.exp((ucb_values - np.max(ucb_values)) / temperature)
         softmax_weights = exp_ucb / np.sum(exp_ucb)
         
-        # Allocate budget proportional to softmax weights
         allocations = {}
         for (cid, _, _, _, _), weight in zip(ucb_scores, softmax_weights):
             allocations[cid] = float(weight * hourly_budget)
         
-        # Ensure campaigns with score=0 get 0 allocation
         for cid, score, _, _ in scores:
             if score == 0 and cid not in allocations:
                 allocations[cid] = 0.0
@@ -447,7 +432,6 @@ class SampleDataAdapter:
             accum_clicks=pd.NamedAgg(column='clicks', aggfunc='sum'),
             accum_conversions=pd.NamedAgg(column='conversions', aggfunc='sum')
         ).reset_index()
-        # For each campaign, create a CampaignState with available information only (no new fields computed).
         campaign_states = []
         for _, row in agg_df.iterrows():
             state = CampaignState(
@@ -585,7 +569,6 @@ class Plotter:
             ax.set_ylabel(title)
             
             if metric_name in self.aggregate_metrics_history and len(self.aggregate_metrics_history[metric_name]) > 0:
-                # Skip first data point (t=0)
                 ax.plot(self.time[1:], self.aggregate_metrics_history[metric_name], marker='o', color='darkblue', linewidth=2, markersize=4)
         
         plt.tight_layout()
@@ -660,19 +643,15 @@ def run_single_simulation(
     """
     import copy
     
-    # Deep copy campaign states to avoid interference
     campaign_states = copy.deepcopy(initial_campaign_states)
     
-    # Create fresh allocator
     allocator = BudgetAllocator(cfg=copy.deepcopy(allocator_cfg))
     
-    # Initialize accumulators
     accumulated_per_campaign: Dict[str, Dict[str, float]] = {}
     accumulated_aggregate: Dict[str, float] = {}
     hours_count = 0
     
     for hour in range(simulation_hours):
-        # Get scores using the specified scoring function
         scores = scoring_func(campaign_states)
         spend_allocation: Dict[str, float] = allocation_func(scores)
         allocator.reduce_current_daily_budget(spend_allocation)
