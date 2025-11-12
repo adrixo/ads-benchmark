@@ -606,23 +606,35 @@ def calculate_final_metrics(
     return final_per_campaign, final_aggregate
 
 
-def run_simulation(
-        simulation_hours: int = 48,
-):
-    plotter = Plotter()
-
-    sample_data_adapter = SampleDataAdapter()
-    campaign_states = sample_data_adapter.load()
-    print("Initial campaign states:")
-    print("--------------------------------")
-    plotter.add_data_points(campaign_states)
-
-    allocator = BudgetAllocator()
-    print("Allocator config:")
-    print(allocator.cfg)
-    print("--------------------------------")
-
-    # Initialize accumulators for averaging metrics
+def run_single_simulation(
+        simulation_hours: int,
+        allocation_method: str,
+        allocation_func,
+        initial_campaign_states: List[CampaignState],
+        allocator_cfg: AllocatorConfig
+) -> Tuple[Dict[str, Dict[str, float]], Dict[str, float]]:
+    """
+    Run a single simulation with a specific allocation method.
+    
+    Args:
+        simulation_hours: Number of hours to simulate
+        allocation_method: Name of the allocation method
+        allocation_func: The allocation function to use
+        initial_campaign_states: Initial campaign states to copy
+        allocator_cfg: Allocator configuration
+    
+    Returns:
+        Tuple of (final_per_campaign_metrics, final_aggregate_metrics)
+    """
+    import copy
+    
+    # Deep copy campaign states to avoid interference
+    campaign_states = copy.deepcopy(initial_campaign_states)
+    
+    # Create fresh allocator
+    allocator = BudgetAllocator(cfg=copy.deepcopy(allocator_cfg))
+    
+    # Initialize accumulators
     accumulated_per_campaign: Dict[str, Dict[str, float]] = {}
     accumulated_aggregate: Dict[str, float] = {}
     hours_count = 0
@@ -630,7 +642,7 @@ def run_simulation(
     for hour in range(simulation_hours):
         # Get scores first for cap violation tracking
         scores = allocator.get_scores(campaign_states)
-        spend_allocation: Dict[str, float] = allocator.allocate_spend_weighted_round_robin(scores)
+        spend_allocation: Dict[str, float] = allocation_func(scores)
         allocator.reduce_current_daily_budget(spend_allocation)
         
         for state in campaign_states:
@@ -640,7 +652,6 @@ def run_simulation(
             allocator.restart_day()
 
         metrics = SimulatorMetrics.calculate_metrics(campaign_states, spend_allocation, scores)
-        plotter.add_data_points(campaign_states, metrics)
         
         # Accumulate per-campaign metrics
         for campaign_id, campaign_metrics in metrics['per_campaign'].items():
@@ -657,35 +668,137 @@ def run_simulation(
         
         hours_count += 1
 
-    # Calculate final metrics (averaged or summed based on metric type)
+    # Calculate final metrics
     final_per_campaign, final_aggregate = calculate_final_metrics(
         accumulated_per_campaign, 
         accumulated_aggregate, 
         hours_count
     )
+    
+    return final_per_campaign, final_aggregate
 
-    # Print final metrics
+
+def run_simulation(
+        simulation_hours: int = 48,
+):
+    """
+    Run simulations comparing all 4 allocation algorithms.
+    """
     print("\n" + "="*80)
-    print("FINAL SIMULATION METRICS")
-    print("(regret & cpa: averaged | total_conversions & cap_violations: summed)")
+    print("RUNNING COMPARISON OF 4 ALLOCATION ALGORITHMS")
     print("="*80)
     
-    if final_per_campaign:
-        # Per-campaign metrics
-        print("\nPer-Campaign Metrics:")
-        print("-" * 80)
-        per_campaign_df = pd.DataFrame(final_per_campaign).T
-        per_campaign_df.index.name = 'Campaign ID'
-        print(per_campaign_df.to_string())
-        
-        # Aggregate metrics
-        print("\n\nAggregate Metrics (All Campaigns):")
-        print("-" * 80)
-        aggregate_df = pd.DataFrame([final_aggregate], index=['Total'])
-        print(aggregate_df.to_string())
-        print("\n" + "="*80)
+    sample_data_adapter = SampleDataAdapter()
+    initial_campaign_states = sample_data_adapter.load()
+    print(f"\nInitial campaign states loaded: {len(initial_campaign_states)} campaigns")
+    print("--------------------------------")
+
+    allocator_cfg = AllocatorConfig()
+    print("\nAllocator config:")
+    print(allocator_cfg)
+    print("--------------------------------\n")
+
+    # Define allocation methods to test
+    temp_allocator = BudgetAllocator(cfg=allocator_cfg)
+    allocation_methods = {
+        'Square Normalization': temp_allocator.allocate_spend_square_normalization,
+        'Simple Normalization': temp_allocator.allocate_spend_normalization,
+        'Weighted Round Robin': temp_allocator.allocate_spend_weighted_round_robin,
+        'UCB Optimal': temp_allocator.allocate_spend_ucb_optimal
+    }
     
-    plotter.show()
+    # Store results for each method
+    all_results: Dict[str, Tuple[Dict[str, Dict[str, float]], Dict[str, float]]] = {}
+    
+    # Run simulation for each allocation method
+    for method_name, allocation_func in allocation_methods.items():
+        print(f"Running simulation with: {method_name}")
+        print("-" * 80)
+        
+        final_per_campaign, final_aggregate = run_single_simulation(
+            simulation_hours=simulation_hours,
+            allocation_method=method_name,
+            allocation_func=allocation_func,
+            initial_campaign_states=initial_campaign_states,
+            allocator_cfg=allocator_cfg
+        )
+        
+        all_results[method_name] = (final_per_campaign, final_aggregate)
+        
+        # Print summary for this method
+        print(f"Results summary:")
+        print(f"  Total Conversions: {final_aggregate['total_conversions']:.2f}")
+        print(f"  Average CPA: {final_aggregate['cpa']:.2f}")
+        print(f"  Average Regret: {final_aggregate['regret']:.2f}")
+        print(f"  Cap Violations: {final_aggregate['cap_violations']:.0f}")
+        print()
+    
+    # Print comparison table
+    print("\n" + "="*80)
+    print("FINAL COMPARISON OF ALL ALGORITHMS")
+    print("(regret & cpa: averaged | total_conversions & cap_violations: summed)")
+    print("="*80 + "\n")
+    
+    # Create comparison DataFrame
+    comparison_data = {}
+    for method_name, (_, aggregate) in all_results.items():
+        comparison_data[method_name] = aggregate
+    
+    comparison_df = pd.DataFrame(comparison_data).T
+    comparison_df.index.name = 'Algorithm'
+    print(comparison_df.to_string())
+    print("\n" + "="*80)
+    
+    # Visualize comparison
+    visualize_algorithm_comparison(comparison_df)
+
+
+def visualize_algorithm_comparison(comparison_df: pd.DataFrame):
+    """
+    Create visualization comparing all allocation algorithms.
+    """
+    fig, axs = plt.subplots(2, 2, figsize=(14, 10))
+    fig.suptitle('Allocation Algorithm Comparison', fontsize=16, fontweight='bold')
+    axs = axs.flatten()
+    
+    metrics = ['regret', 'cpa', 'total_conversions', 'cap_violations']
+    metric_titles = ['Regret (Mean)', 'CPA (Weighted)', 'Total Conversions (Sum)', 'Cap Violations (Sum)']
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']
+    
+    for i, (metric, title) in enumerate(zip(metrics, metric_titles)):
+        ax = axs[i]
+        
+        if metric in comparison_df.columns:
+            values = comparison_df[metric]
+            
+            bars = ax.bar(range(len(values)), values, color=colors, alpha=0.7, edgecolor='black', linewidth=1.5)
+            ax.set_xticks(range(len(values)))
+            ax.set_xticklabels(values.index, rotation=45, ha='right', fontsize=9)
+            ax.set_title(title, fontsize=12, fontweight='bold')
+            ax.set_ylabel(title, fontsize=10)
+            ax.grid(True, alpha=0.3, axis='y')
+            
+            # Add value labels on top of bars
+            for bar in bars:
+                height = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2., height,
+                       f'{height:.2f}',
+                       ha='center', va='bottom', fontsize=9, fontweight='bold')
+            
+            # Highlight the best performer
+            if metric in ['total_conversions']:
+                # Higher is better
+                best_idx = values.argmax()
+                bars[best_idx].set_edgecolor('green')
+                bars[best_idx].set_linewidth(3)
+            elif metric in ['regret', 'cpa', 'cap_violations']:
+                # Lower is better
+                best_idx = values.argmin()
+                bars[best_idx].set_edgecolor('green')
+                bars[best_idx].set_linewidth(3)
+    
+    plt.tight_layout()
+    plt.show()
 
 
 if __name__ == "__main__":
