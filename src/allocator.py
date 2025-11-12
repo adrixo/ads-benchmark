@@ -506,6 +506,11 @@ def run_simulation(
     print(allocator.cfg)
     print("--------------------------------")
 
+    # Initialize accumulators for averaging metrics
+    accumulated_per_campaign: Dict[str, Dict[str, float]] = {}
+    accumulated_aggregate: Dict[str, float] = {}
+    hours_count = 0
+    
     for hour in range(simulation_hours):
         # Get scores first for cap violation tracking
         scores = allocator.get_scores(campaign_states)
@@ -520,7 +525,66 @@ def run_simulation(
 
         metrics = SimulatorMetrics.calculate_metrics(campaign_states, spend_allocation, scores)
         plotter.add_data_points(campaign_states, metrics)
+        
+        # Accumulate per-campaign metrics
+        for campaign_id, campaign_metrics in metrics['per_campaign'].items():
+            if campaign_id not in accumulated_per_campaign:
+                accumulated_per_campaign[campaign_id] = {k: 0.0 for k in campaign_metrics.keys()}
+            for metric_name, metric_value in campaign_metrics.items():
+                accumulated_per_campaign[campaign_id][metric_name] += metric_value
+        
+        # Accumulate aggregate metrics
+        for metric_name, metric_value in metrics['aggregate'].items():
+            if metric_name not in accumulated_aggregate:
+                accumulated_aggregate[metric_name] = 0.0
+            accumulated_aggregate[metric_name] += metric_value
+        
+        hours_count += 1
 
+    # Calculate averages (and sums for specific metrics)
+    metrics_to_sum = {'cap_violations', 'total_conversions'}
+    
+    average_per_campaign = {}
+    for campaign_id, metrics_sum in accumulated_per_campaign.items():
+        average_per_campaign[campaign_id] = {}
+        for metric_name, metric_value in metrics_sum.items():
+            if metric_name in metrics_to_sum:
+                # Sum these metrics instead of averaging
+                average_per_campaign[campaign_id][metric_name] = metric_value
+            else:
+                # Average other metrics
+                average_per_campaign[campaign_id][metric_name] = metric_value / hours_count
+    
+    average_aggregate = {}
+    for metric_name, metric_value in accumulated_aggregate.items():
+        if metric_name in metrics_to_sum:
+            # Sum these metrics instead of averaging
+            average_aggregate[metric_name] = metric_value
+        else:
+            # Average other metrics
+            average_aggregate[metric_name] = metric_value / hours_count
+
+    # Print final metrics
+    print("\n" + "="*80)
+    print("FINAL SIMULATION METRICS")
+    print("(regret & cpa: averaged | total_conversions & cap_violations: summed)")
+    print("="*80)
+    
+    if average_per_campaign:
+        # Per-campaign metrics
+        print("\nPer-Campaign Metrics:")
+        print("-" * 80)
+        per_campaign_df = pd.DataFrame(average_per_campaign).T
+        per_campaign_df.index.name = 'Campaign ID'
+        print(per_campaign_df.to_string())
+        
+        # Aggregate metrics
+        print("\n\nAggregate Metrics (All Campaigns):")
+        print("-" * 80)
+        aggregate_df = pd.DataFrame([average_aggregate], index=['Total'])
+        print(aggregate_df.to_string())
+        print("\n" + "="*80)
+    
     plotter.show()
 
 
