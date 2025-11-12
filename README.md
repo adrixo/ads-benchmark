@@ -44,7 +44,9 @@ To ensure reproducibility, we **separate campaign simulation from estimation**:
 - **Estimator / allocator:**  
   Observes only simulated data and decides hourly spend for the next period.
 
-To have enough samples on same algorithm we compare 1 vs N attems over the same algorithm and obtain the last metrics as mean
+**Statistical Robustness**: Each algorithm combination runs 500 times with different random seeds. Final metrics are averaged across all runs to eliminate noise and ensure reliable comparisons.
+
+**Important**: To preserve the original exercise design, each simulation run generates independent CPC/CVR trajectories per campaign. No fixed "ground truth" conversion rates are assumed between same campaign_id estimated by different algorithms.
 
 ### Algorithms & Method
 
@@ -82,6 +84,8 @@ Final benchmark comparing 2 scoring methods × 4 allocation methods across 500 i
 ![Single Campaign](simulation_squ.jpeg)
 ---
 ![Aggregate Metrics](metrics_per_campaign.png)
+
+- Erratum: In this visualization, cap violations show the *amount* by which CPA exceeds the cap (continuous value), not the count of violations (discrete count). 
 ---
 ![Aggregate Metrics](metrics_aggr.png)
 
@@ -91,8 +95,10 @@ Final benchmark comparing 2 scoring methods × 4 allocation methods across 500 i
 
 # Limitations
 
-- **The inner empiric campaign in real life can vary over time so results are highly dependant on the knowledge of how that works** A following step is to force each individual campaign to have same inner CVR and CPC on each hour
+- **The inner empiric campaign's CPC/CVR in real life can vary over time so results are highly dependant on the knowledge of how that works** A following step is to force each individual campaign to have same inner CVR and CPC on each hour
+- Experiment uses only 3 campaigns. Algorithm performance may vary with different inputs (e.g., more campaigns, or campaigns with similar characteristics)
 - we assume conversions are immediate for the scope of this project
+- **Evaluation criteria**: Results lack a clear optimization target and are hard to interpret. Future improvement: define a single objective function (e.g., maximize ROI per product) and validate against real-world data
 - Be careful with the beta and alfa, long running campaigns need to keep a window over the clicks / conversions 
 
 - Primitive obsession: one of the problem of the solution delivered is that it passes a lot of unkown (list, float float) through parameters which reduces readability.
