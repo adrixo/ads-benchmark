@@ -114,6 +114,10 @@ class BudgetAllocator:
         return allocated_spend
 
     def get_scores(self, campaign_states: List[CampaignState]) -> List[Tuple[str, float, float, float]]:
+        """
+        Bayesian scoring using Beta distribution for CVR sampling.
+        Incorporates uncertainty through alpha/beta parameters.
+        """
         scores: List[Tuple[str, float, float, float]] = []  # (cid, score, sampled_cpa, sample_cpc)
         for state in campaign_states:
             p_sample = np.random.beta(state.alpha, state.beta)
@@ -127,6 +131,33 @@ class BudgetAllocator:
 
             scores.append((state.campaign_id, score, sampled_cpa, sample_cpc))
 
+        scores.sort(key=lambda x: x[1], reverse=True)
+        return scores
+    
+    def get_scores_baseline(self, campaign_states: List[CampaignState]) -> List[Tuple[str, float, float, float]]:
+        """
+        Baseline trivial scoring: samples CPA using normal distribution around historical CPA.
+        """
+        scores: List[Tuple[str, float, float, float]] = []  # (cid, score, sampled_cpa, sample_cpc)
+        
+        for state in campaign_states:
+            sampled_cpa = np.random.normal(state.cpa, state.cpa *0.5)
+            sampled_cpa = max(1e-8, sampled_cpa)
+            
+            sample_cpc = state.cpc
+            
+            # Simple score: inverse of CPA (lower CPA = higher score)
+            score = 1.0 / sampled_cpa if sampled_cpa > 0 else 0.0
+            
+            if sampled_cpa > state.cfg.cpa_cap:
+                score = 0.0
+            
+            scores.append((state.campaign_id, score, sampled_cpa, sample_cpc))
+        
+        max_score = max((s for _, s, _, _ in scores), default=1.0)
+        if max_score > 0:
+            scores = [(cid, min(1.0, score / max_score), cpa, cpc) for cid, score, cpa, cpc in scores]
+        
         scores.sort(key=lambda x: x[1], reverse=True)
         return scores
 
@@ -205,22 +236,6 @@ class BudgetAllocator:
         return allocations
     
     def allocate_spend_ucb_optimal(self, scores: List[Tuple[str, float, float, float]], exploration_factor: float = 0.1) -> Dict[str, float]:
-        """
-        Optimal allocation using Upper Confidence Bound (UCB) approach.
-        
-        This algorithm:
-        1. Calculates UCB scores combining expected performance and uncertainty
-        2. Uses a greedy approach with exploration bonus
-        3. Allocates larger chunks to campaigns with higher UCB scores
-        4. Balances exploitation (best known) vs exploration (uncertain)
-        
-        Args:
-            scores: List of (campaign_id, score, sampled_cpa, sample_cpc)
-            exploration_factor: Controls exploration vs exploitation trade-off (0-1)
-        
-        Returns:
-            Dict mapping campaign_id to allocated spend
-        """
         if not scores:
             return {}
         
@@ -625,16 +640,18 @@ def run_single_simulation(
         simulation_hours: int,
         allocation_method: str,
         allocation_func,
+        scoring_func,
         initial_campaign_states: List[CampaignState],
         allocator_cfg: AllocatorConfig
 ) -> Tuple[Dict[str, Dict[str, float]], Dict[str, float]]:
     """
-    Run a single simulation with a specific allocation method.
+    Run a single simulation with a specific allocation method and scoring function.
     
     Args:
         simulation_hours: Number of hours to simulate
         allocation_method: Name of the allocation method
         allocation_func: The allocation function to use
+        scoring_func: The scoring function to use
         initial_campaign_states: Initial campaign states to copy
         allocator_cfg: Allocator configuration
     
@@ -655,8 +672,8 @@ def run_single_simulation(
     hours_count = 0
     
     for hour in range(simulation_hours):
-        # Get scores first for cap violation tracking
-        scores = allocator.get_scores(campaign_states)
+        # Get scores using the specified scoring function
+        scores = scoring_func(campaign_states)
         spend_allocation: Dict[str, float] = allocation_func(scores)
         allocator.reduce_current_daily_budget(spend_allocation)
         
@@ -698,15 +715,15 @@ def run_simulation(
         num_runs: int = 500
 ):
     """
-    Run simulations comparing all 4 allocation algorithms.
-    Each algorithm is run multiple times and results are averaged for accuracy.
+    Run simulations comparing 2 scoring functions × 4 allocation algorithms (8 combinations).
+    Each combination is run multiple times and results are averaged for accuracy.
     
     Args:
         simulation_hours: Number of hours to simulate per run
-        num_runs: Number of times to run each algorithm (default: 20)
+        num_runs: Number of times to run each combination (default: 500)
     """
     print("\n" + "="*80)
-    print(f"RUNNING COMPARISON OF 4 ALLOCATION ALGORITHMS ({num_runs} runs each)")
+    print(f"RUNNING COMPARISON: 2 SCORING × 4 ALLOCATION METHODS ({num_runs} runs each)")
     print("="*80)
     
     sample_data_adapter = SampleDataAdapter()
@@ -719,70 +736,79 @@ def run_simulation(
     print(allocator_cfg)
     print("--------------------------------\n")
 
-    # Define allocation methods to test
+    # Define scoring methods to test
     temp_allocator = BudgetAllocator(cfg=allocator_cfg)
+    scoring_methods = {
+        'Bayesian': temp_allocator.get_scores,
+        'Baseline': temp_allocator.get_scores_baseline
+    }
+    
+    # Define allocation methods to test
     allocation_methods = {
-        'Square Normalization': temp_allocator.allocate_spend_square_normalization,
-        'Simple Normalization': temp_allocator.allocate_spend_normalization,
-        'Weighted Round Robin': temp_allocator.allocate_spend_weighted_round_robin,
+        'Square Norm': temp_allocator.allocate_spend_square_normalization,
+        'Simple Norm': temp_allocator.allocate_spend_normalization,
+        'Weighted RR': temp_allocator.allocate_spend_weighted_round_robin,
         'UCB Optimal': temp_allocator.allocate_spend_ucb_optimal
     }
     
-    # Store averaged results for each method
+    # Store averaged results for each combination
     all_results: Dict[str, Dict[str, float]] = {}
     
-    # Run simulation for each allocation method multiple times
-    for method_name, allocation_func in allocation_methods.items():
-        print(f"Running {num_runs} simulations with: {method_name}")
-        print("-" * 80)
-        
-        # Accumulate metrics across all runs
-        accumulated_metrics: Dict[str, float] = {}
-        
-        for run in range(num_runs):
-            # Show progress for every run
-            print(f"  Run {run + 1}/{num_runs}...", end='\r')
+    # Run simulation for each scoring + allocation combination
+    for scoring_name, scoring_func in scoring_methods.items():
+        for allocation_name, allocation_func in allocation_methods.items():
+            combination_name = f"{scoring_name} + {allocation_name}"
+            print(f"Running {num_runs} simulations: {combination_name}")
+            print("-" * 80)
             
-            final_per_campaign, final_aggregate = run_single_simulation(
-                simulation_hours=simulation_hours,
-                allocation_method=method_name,
-                allocation_func=allocation_func,
-                initial_campaign_states=initial_campaign_states,
-                allocator_cfg=allocator_cfg
-            )
+            # Accumulate metrics across all runs
+            accumulated_metrics: Dict[str, float] = {}
             
-            # Accumulate aggregate metrics
-            for metric_name, metric_value in final_aggregate.items():
-                if metric_name not in accumulated_metrics:
-                    accumulated_metrics[metric_name] = 0.0
-                accumulated_metrics[metric_name] += metric_value
-        
-        # Calculate average metrics
-        averaged_metrics = {
-            metric_name: metric_value / num_runs 
-            for metric_name, metric_value in accumulated_metrics.items()
-        }
-        
-        all_results[method_name] = averaged_metrics
-        
-        # Print summary for this method
-        print(f"  ✓ Completed all {num_runs} runs" + " " * 20)  # Clear the line
-        print(f"Average results across {num_runs} runs:")
-        print(f"  Total Conversions: {averaged_metrics['total_conversions']:.2f}")
-        print(f"  Average CPA: {averaged_metrics['cpa']:.2f}")
-        print(f"  Average Regret: {averaged_metrics['regret']:.2f}")
-        print(f"  Cap Violations: {averaged_metrics['cap_violations']:.2f}")
-        print()
+            for run in range(num_runs):
+                # Show progress for every run
+                print(f"  Run {run + 1}/{num_runs}...", end='\r')
+                
+                final_per_campaign, final_aggregate = run_single_simulation(
+                    simulation_hours=simulation_hours,
+                    allocation_method=combination_name,
+                    allocation_func=allocation_func,
+                    scoring_func=scoring_func,
+                    initial_campaign_states=initial_campaign_states,
+                    allocator_cfg=allocator_cfg
+                )
+                
+                # Accumulate aggregate metrics
+                for metric_name, metric_value in final_aggregate.items():
+                    if metric_name not in accumulated_metrics:
+                        accumulated_metrics[metric_name] = 0.0
+                    accumulated_metrics[metric_name] += metric_value
+            
+            # Calculate average metrics
+            averaged_metrics = {
+                metric_name: metric_value / num_runs 
+                for metric_name, metric_value in accumulated_metrics.items()
+            }
+            
+            all_results[combination_name] = averaged_metrics
+            
+            # Print summary for this combination
+            print(f"  ✓ Completed all {num_runs} runs" + " " * 20)  # Clear the line
+            print(f"Average results across {num_runs} runs:")
+            print(f"  Total Conversions: {averaged_metrics['total_conversions']:.2f}")
+            print(f"  Average CPA: {averaged_metrics['cpa']:.2f}")
+            print(f"  Average Regret: {averaged_metrics['regret']:.2f}")
+            print(f"  Cap Violations: {averaged_metrics['cap_violations']:.2f}")
+            print()
     
     # Print comparison table
     print("\n" + "="*80)
-    print(f"FINAL COMPARISON OF ALL ALGORITHMS (averaged over {num_runs} runs)")
+    print(f"FINAL COMPARISON (averaged over {num_runs} runs)")
     print("(regret & cpa: averaged | total_conversions & cap_violations: summed)")
     print("="*80 + "\n")
     
     # Create comparison DataFrame
     comparison_df = pd.DataFrame(all_results).T
-    comparison_df.index.name = 'Algorithm'
+    comparison_df.index.name = 'Scoring + Allocation Method'
     print(comparison_df.to_string())
     print("\n" + "="*80)
     
@@ -792,19 +818,22 @@ def run_simulation(
 
 def visualize_algorithm_comparison(comparison_df: pd.DataFrame, num_runs: int = 20):
     """
-    Create visualization comparing all allocation algorithms.
+    Create visualization comparing all scoring + allocation combinations.
     
     Args:
         comparison_df: DataFrame with comparison metrics
         num_runs: Number of runs averaged for the results
     """
-    fig, axs = plt.subplots(2, 2, figsize=(14, 10))
-    fig.suptitle(f'Allocation Algorithm Comparison (averaged over {num_runs} runs)', fontsize=16, fontweight='bold')
+    fig, axs = plt.subplots(2, 2, figsize=(18, 12))
+    fig.suptitle(f'Scoring + Allocation Method Comparison (averaged over {num_runs} runs)', fontsize=16, fontweight='bold')
     axs = axs.flatten()
     
     metrics = ['regret', 'cpa', 'total_conversions', 'cap_violations']
     metric_titles = ['Regret (Mean)', 'CPA (Weighted)', 'Total Conversions (Sum)', 'Cap Violations (Sum)']
-    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']
+    
+    # Use different colors for Bayesian vs Baseline
+    colors_bayesian = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']  # Blue, orange, green, red
+    colors_baseline = ['#aec7e8', '#ffbb78', '#98df8a', '#ff9896']  # Lighter versions
     
     for i, (metric, title) in enumerate(zip(metrics, metric_titles)):
         ax = axs[i]
@@ -812,9 +841,32 @@ def visualize_algorithm_comparison(comparison_df: pd.DataFrame, num_runs: int = 
         if metric in comparison_df.columns:
             values = comparison_df[metric]
             
-            bars = ax.bar(range(len(values)), values, color=colors, alpha=0.7, edgecolor='black', linewidth=1.5)
+            # Assign colors based on scoring method (Bayesian or Baseline)
+            bar_colors = []
+            for idx, label in enumerate(values.index):
+                if 'Bayesian' in label:
+                    # Use colors based on allocation method
+                    if 'Square' in label:
+                        bar_colors.append(colors_bayesian[0])
+                    elif 'Simple' in label:
+                        bar_colors.append(colors_bayesian[1])
+                    elif 'Weighted' in label:
+                        bar_colors.append(colors_bayesian[2])
+                    else:  # UCB
+                        bar_colors.append(colors_bayesian[3])
+                else:  # Baseline
+                    if 'Square' in label:
+                        bar_colors.append(colors_baseline[0])
+                    elif 'Simple' in label:
+                        bar_colors.append(colors_baseline[1])
+                    elif 'Weighted' in label:
+                        bar_colors.append(colors_baseline[2])
+                    else:  # UCB
+                        bar_colors.append(colors_baseline[3])
+            
+            bars = ax.bar(range(len(values)), values, color=bar_colors, alpha=0.8, edgecolor='black', linewidth=1.2)
             ax.set_xticks(range(len(values)))
-            ax.set_xticklabels(values.index, rotation=45, ha='right', fontsize=9)
+            ax.set_xticklabels(values.index, rotation=45, ha='right', fontsize=7)
             ax.set_title(title, fontsize=12, fontweight='bold')
             ax.set_ylabel(title, fontsize=10)
             ax.grid(True, alpha=0.3, axis='y')
@@ -823,10 +875,10 @@ def visualize_algorithm_comparison(comparison_df: pd.DataFrame, num_runs: int = 
             for bar in bars:
                 height = bar.get_height()
                 ax.text(bar.get_x() + bar.get_width()/2., height,
-                       f'{height:.2f}',
-                       ha='center', va='bottom', fontsize=9, fontweight='bold')
+                       f'{height:.1f}',
+                       ha='center', va='bottom', fontsize=7, fontweight='bold')
             
-            # Highlight the best performer
+            # Highlight the best performer with thick green border
             if metric in ['total_conversions']:
                 # Higher is better
                 best_idx = values.argmax()
