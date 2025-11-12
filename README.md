@@ -76,18 +76,13 @@ Final benchmark comparing 2 scoring methods × 4 allocation methods across 500 i
 
 ---
 
-## Per-Campaign Metrics Over Time
-
-
-![Per-Campaign Metrics](metrics_per_campaign.png)
-
----
-
 ## Single Campaign Example (Square Normalization)
 
 
 ![Single Campaign](simulation_squ.jpeg)
+---
 ![Aggregate Metrics](metrics_per_campaign.png)
+---
 ![Aggregate Metrics](metrics_aggr.png)
 
 
