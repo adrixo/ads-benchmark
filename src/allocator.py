@@ -490,6 +490,50 @@ class Plotter:
         plt.show()
 
 
+def calculate_final_metrics(
+    accumulated_per_campaign: Dict[str, Dict[str, float]], 
+    accumulated_aggregate: Dict[str, float], 
+    hours_count: int
+) -> Tuple[Dict[str, Dict[str, float]], Dict[str, float]]:
+    """
+    Calculate final metrics by averaging or summing depending on metric type.
+    
+    Args:
+        accumulated_per_campaign: Accumulated per-campaign metrics
+        accumulated_aggregate: Accumulated aggregate metrics
+        hours_count: Number of hours simulated
+    
+    Returns:
+        Tuple of (per_campaign_metrics, aggregate_metrics)
+    """
+    # Metrics that should be summed instead of averaged
+    metrics_to_sum = {'cap_violations', 'total_conversions'}
+    
+    # Process per-campaign metrics
+    final_per_campaign = {}
+    for campaign_id, metrics_sum in accumulated_per_campaign.items():
+        final_per_campaign[campaign_id] = {}
+        for metric_name, metric_value in metrics_sum.items():
+            if metric_name in metrics_to_sum:
+                # Sum these metrics instead of averaging
+                final_per_campaign[campaign_id][metric_name] = metric_value
+            else:
+                # Average other metrics
+                final_per_campaign[campaign_id][metric_name] = metric_value / hours_count
+    
+    # Process aggregate metrics
+    final_aggregate = {}
+    for metric_name, metric_value in accumulated_aggregate.items():
+        if metric_name in metrics_to_sum:
+            # Sum these metrics instead of averaging
+            final_aggregate[metric_name] = metric_value
+        else:
+            # Average other metrics
+            final_aggregate[metric_name] = metric_value / hours_count
+    
+    return final_per_campaign, final_aggregate
+
+
 def run_simulation(
         simulation_hours: int = 48,
 ):
@@ -541,28 +585,12 @@ def run_simulation(
         
         hours_count += 1
 
-    # Calculate averages (and sums for specific metrics)
-    metrics_to_sum = {'cap_violations', 'total_conversions'}
-    
-    average_per_campaign = {}
-    for campaign_id, metrics_sum in accumulated_per_campaign.items():
-        average_per_campaign[campaign_id] = {}
-        for metric_name, metric_value in metrics_sum.items():
-            if metric_name in metrics_to_sum:
-                # Sum these metrics instead of averaging
-                average_per_campaign[campaign_id][metric_name] = metric_value
-            else:
-                # Average other metrics
-                average_per_campaign[campaign_id][metric_name] = metric_value / hours_count
-    
-    average_aggregate = {}
-    for metric_name, metric_value in accumulated_aggregate.items():
-        if metric_name in metrics_to_sum:
-            # Sum these metrics instead of averaging
-            average_aggregate[metric_name] = metric_value
-        else:
-            # Average other metrics
-            average_aggregate[metric_name] = metric_value / hours_count
+    # Calculate final metrics (averaged or summed based on metric type)
+    final_per_campaign, final_aggregate = calculate_final_metrics(
+        accumulated_per_campaign, 
+        accumulated_aggregate, 
+        hours_count
+    )
 
     # Print final metrics
     print("\n" + "="*80)
@@ -570,18 +598,18 @@ def run_simulation(
     print("(regret & cpa: averaged | total_conversions & cap_violations: summed)")
     print("="*80)
     
-    if average_per_campaign:
+    if final_per_campaign:
         # Per-campaign metrics
         print("\nPer-Campaign Metrics:")
         print("-" * 80)
-        per_campaign_df = pd.DataFrame(average_per_campaign).T
+        per_campaign_df = pd.DataFrame(final_per_campaign).T
         per_campaign_df.index.name = 'Campaign ID'
         print(per_campaign_df.to_string())
         
         # Aggregate metrics
         print("\n\nAggregate Metrics (All Campaigns):")
         print("-" * 80)
-        aggregate_df = pd.DataFrame([average_aggregate], index=['Total'])
+        aggregate_df = pd.DataFrame([final_aggregate], index=['Total'])
         print(aggregate_df.to_string())
         print("\n" + "="*80)
     
