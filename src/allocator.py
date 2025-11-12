@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from matplotlib.dates import TU
 import pandas as pd
 import numpy as np
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Dict, Any, Optional
 from matplotlib import pyplot as plt
 
 @dataclass
@@ -84,6 +84,7 @@ class CampaignState:
         self.cum_clicks += clicks
         self.cum_conversions += conversions
         self.cum_cost += spend_allocation
+        self.cum_spend_allocated += spend_allocation
         self.hour_spend_allocated = spend_allocation
 
 
@@ -196,26 +197,165 @@ class BudgetAllocator:
 
 
 class Metric:
+    """Individual metric calculation methods"""
+    
     @staticmethod
-    def regret(self, allocated_spend: Dict[str, Tuple[float, float, float]], campaign: CampaignState) -> float:
+    def regret(allocated_spend: Tuple[float, float, float], campaign: CampaignState) -> float:
+        """
+        Measures opportunity cost: theoretical best conversions - actual conversions.
+        Uses the sampled CPA from allocation to estimate what could have been achieved.
+        """
+        spend_amount, sampled_cpa, _ = allocated_spend
+        
+        # Theoretical conversions if we had perfect information
+        if sampled_cpa > 0:
+            theoretical_conversions = spend_amount / sampled_cpa
+        else:
+            theoretical_conversions = 0.0
+        
+        # Actual conversions achieved
+        actual_conversions = campaign.cum_conversions
+        
+        # Regret is the missed opportunity (lower is better)
+        return max(0.0, theoretical_conversions - actual_conversions)
+    
+    @staticmethod
+    def cpa(allocated_spend: Tuple[float, float, float], campaign: CampaignState) -> float:
+        """Returns the actual Cost Per Acquisition for the campaign."""
+        return campaign.cpa
+    
+    @staticmethod
+    def total_conversions(allocated_spend: Tuple[float, float, float], campaign: CampaignState) -> float:
+        """Returns the total cumulative conversions achieved."""
+        return float(campaign.cum_conversions)
+    
+    @staticmethod
+    def pacing_error(allocated_spend: Tuple[float, float, float], campaign: CampaignState) -> float:
+        """
+        Measures deviation from ideal even pacing of spend.
+        Returns absolute deviation from expected spend at this point.
+        """
+        spend_amount, _, _ = allocated_spend
+        
+        # If we have cumulative spend allocated, we can measure pacing
+        if campaign.cum_spend_allocated > 0:
+            # Simplified: large deviations in hour-to-hour allocation indicate poor pacing
+            avg_hourly_spend = campaign.cum_spend_allocated / max(1, campaign.cum_clicks // 10 + 1)
+            deviation = abs(spend_amount - avg_hourly_spend)
+            return deviation
+        
         return 0.0
     
     @staticmethod
-    def cpa(self, allocated_spend: Dict[str, Tuple[float, float, float]], campaign: CampaignState) -> float:
-        return 0.0
-    
-    @staticmethod
-    def total_conversions(self, allocated_spend: Dict[str, Tuple[float, float, float]], campaign: CampaignState) -> float:
-        return 0.0
-    
-    @staticmethod
-    def pacing_error(self, allocated_spend: Dict[str, Tuple[float, float, float]], campaign: CampaignState) -> float:
-        return 0.0
+    def cap_violations(allocated_spend: Tuple[float, float, float], campaign: CampaignState) -> float:
+        """
+        Measures how much the actual CPA exceeds the cap.
+        Returns 0 if within cap, otherwise returns the excess amount.
+        """
+        actual_cpa = campaign.cpa
+        cap = campaign.cfg.cpa_cap
+        
+        # Return the violation amount (0 if no violation)
+        return max(0.0, actual_cpa - cap)
 
-    @staticmethod
-    def cap_violations(self, allocated_spend: Dict[str, Tuple[float, float, float]], campaign: CampaignState) -> float:
-        return 0.0
 
+class SimulatorMetrics:
+    """Aggregates metrics across campaigns"""
+    
+    @staticmethod
+    def calculate_metrics(campaigns: List[CampaignState], allocated_spend: Dict[str, Tuple[float, float, float]], scores: Optional[List[Tuple[str, float, float, float]]] = None) -> Dict[str, Any]:
+        """
+        Calculate metrics for each campaign and aggregate metrics across all campaigns.
+        
+        Args:
+            campaigns: List of campaign states
+            allocated_spend: Dict mapping campaign_id to (spend, sampled_cpa, sample_cpc)
+            scores: Optional list of scores from get_scores (to count cap violations)
+        
+        Returns:
+            Dict with structure:
+            {
+                'per_campaign': {
+                    'campaign_id': {
+                        'regret': float,
+                        'cpa': float,
+                        'total_conversions': float,
+                        'pacing_error': float,
+                        'cap_violations': float
+                    },
+                    ...
+                },
+                'aggregate': {
+                    'regret': float (mean),
+                    'cpa': float (weighted by total spend/conversions),
+                    'total_conversions': float (sum),
+                    'pacing_error': float (budget pacing error),
+                    'cap_violations': float (count of campaigns with score=0)
+                }
+            }
+        """
+        per_campaign_metrics: Dict[str, Dict[str, float]] = {}
+        
+        # Calculate metrics for each campaign
+        total_spend = 0.0
+        total_conversions_sum = 0.0
+        regrets = []
+        
+        for campaign in campaigns:
+            allocation = allocated_spend.get(campaign.campaign_id, (0.0, 0.0, 0.0))
+            
+            campaign_regret = Metric.regret(allocation, campaign)
+            campaign_cpa = Metric.cpa(allocation, campaign)
+            campaign_conversions = Metric.total_conversions(allocation, campaign)
+            campaign_pacing = Metric.pacing_error(allocation, campaign)
+            campaign_cap_violation = Metric.cap_violations(allocation, campaign)
+            
+            per_campaign_metrics[campaign.campaign_id] = {
+                'regret': campaign_regret,
+                'cpa': campaign_cpa,
+                'total_conversions': campaign_conversions,
+                'pacing_error': campaign_pacing,
+                'cap_violations': campaign_cap_violation
+            }
+            
+            # Accumulate for aggregate metrics
+            regrets.append(campaign_regret)
+            total_spend += campaign.cum_cost
+            total_conversions_sum += campaign_conversions
+        
+        # Calculate aggregate metrics
+        aggregate_metrics: Dict[str, float] = {}
+        
+        # Regret: average of all regrets
+        aggregate_metrics['regret'] = float(np.mean(regrets)) if regrets else 0.0
+        
+        # CPA: sum of all cum_cost / sum of all conversions (weighted average)
+        if total_conversions_sum > 0:
+            aggregate_metrics['cpa'] = total_spend / total_conversions_sum
+        else:
+            aggregate_metrics['cpa'] = 0.0
+        
+        # Total conversions: sum of all conversions
+        aggregate_metrics['total_conversions'] = total_conversions_sum
+        
+        # Pacing error: for budget pacing, calculate deviation from ideal even pacing
+        # Ideal: each campaign should spend evenly over time
+        pacing_errors = [m['pacing_error'] for m in per_campaign_metrics.values()]
+        aggregate_metrics['pacing_error'] = float(np.mean(pacing_errors)) if pacing_errors else 0.0
+        
+        # Cap violations: count how many campaigns have score=0 (removed due to cap)
+        if scores is not None:
+            cap_violation_count = sum(1 for _, score, _, _ in scores if score == 0.0)
+            aggregate_metrics['cap_violations'] = float(cap_violation_count)
+        else:
+            # Alternative: count campaigns where CPA exceeds cap
+            cap_violation_count = sum(1 for m in per_campaign_metrics.values() if m['cap_violations'] > 0)
+            aggregate_metrics['cap_violations'] = float(cap_violation_count)
+        
+        return {
+            'per_campaign': per_campaign_metrics,
+            'aggregate': aggregate_metrics
+        }
 
 class SampleDataAdapter:
     def __init__(self):
@@ -251,12 +391,16 @@ class SampleDataAdapter:
 class Plotter:
     def __init__(self):
         self.history: Dict[str, Dict[str, List[float]]] = {}
+        self.metrics_history: Dict[str, Dict[str, List[float]]] = {}
+        self.aggregate_metrics_history: Dict[str, List[float]] = {}
         self.time = []
         self.t = 0
     
-    def add_data_points(self, campaign_states: List[CampaignState]):
+    def add_data_points(self, campaign_states: List[CampaignState], metrics_data: Optional[Dict[str, Any]] = None):
         self.time.append(self.t)
         self.t += 1
+        
+        # Add campaign state data
         for state in campaign_states:
             if state.campaign_id not in self.history:
                 self.history[state.campaign_id] = {k: [] for k in ['cpa', 'cvr', 'cpc', 'conv', 'clicks', 'spend', 'hour_spend']}
@@ -268,9 +412,36 @@ class Plotter:
             h['clicks'].append(state.cum_clicks)
             h['spend'].append(state.cum_cost)
             h['hour_spend'].append(state.hour_spend_allocated)
+        
+        # Add metrics data if provided
+        if metrics_data:
+            # Per-campaign metrics
+            for campaign_id, campaign_metrics in metrics_data.get('per_campaign', {}).items():
+                if campaign_id not in self.metrics_history:
+                    self.metrics_history[campaign_id] = {k: [] for k in ['regret', 'cpa', 'total_conversions', 'pacing_error', 'cap_violations']}
+                for metric_name, metric_value in campaign_metrics.items():
+                    self.metrics_history[campaign_id][metric_name].append(metric_value)
+            
+            # Aggregate metrics
+            for metric_name, metric_value in metrics_data.get('aggregate', {}).items():
+                if metric_name not in self.aggregate_metrics_history:
+                    self.aggregate_metrics_history[metric_name] = []
+                self.aggregate_metrics_history[metric_name].append(metric_value)
     
     def show(self):
+        # First plot: Campaign states
+        self._show_campaign_states()
+        
+        # Second plot: Per-campaign metrics
+        self._show_per_campaign_metrics()
+        
+        # Third plot: Aggregate metrics
+        self._show_aggregate_metrics()
+    
+    def _show_campaign_states(self):
+        """Show original campaign state plots"""
         fig, axs = plt.subplots(4, 2, figsize=(12, 14))
+        fig.suptitle('Campaign States Over Time', fontsize=16)
         axs = axs.flatten()
         titles = ["CPA", "CVR", "CPC", "Conversions", "Clicks", "Spend", "Hour Spend Allocated"]
         metrics = ['cpa', 'cvr', 'cpc', 'conv', 'clicks', 'spend', 'hour_spend']
@@ -288,6 +459,67 @@ class Plotter:
                 for cid, h in self.history.items():
                     ax.plot(self.time, h[metric], marker='o', label=cid, markersize=3)
                 ax.legend()
+        
+        plt.tight_layout()
+        plt.show()
+    
+    def _show_per_campaign_metrics(self):
+        """Show per-campaign metrics over time"""
+        if not self.metrics_history:
+            return
+        
+        fig, axs = plt.subplots(3, 2, figsize=(14, 12))
+        fig.suptitle('Per-Campaign Metrics Over Time', fontsize=16)
+        axs = axs.flatten()
+        
+        metric_names = ['regret', 'cpa', 'total_conversions', 'pacing_error', 'cap_violations']
+        metric_titles = ['Regret', 'CPA', 'Total Conversions', 'Pacing Error', 'Cap Violations']
+        
+        for i, (metric_name, title) in enumerate(zip(metric_names, metric_titles)):
+            ax = axs[i]
+            ax.set_title(title)
+            ax.grid(True, alpha=0.3)
+            ax.set_xlabel('Time (hours)')
+            ax.set_ylabel(title)
+            
+            for campaign_id, metrics_data in self.metrics_history.items():
+                if metric_name in metrics_data and len(metrics_data[metric_name]) > 0:
+                    # Skip first data point (t=0)
+                    ax.plot(self.time[1:], metrics_data[metric_name], marker='o', label=campaign_id, markersize=3)
+            
+            ax.legend()
+        
+        # Hide the last unused subplot
+        axs[5].axis('off')
+        
+        plt.tight_layout()
+        plt.show()
+    
+    def _show_aggregate_metrics(self):
+        """Show aggregate metrics over time"""
+        if not self.aggregate_metrics_history:
+            return
+        
+        fig, axs = plt.subplots(3, 2, figsize=(14, 12))
+        fig.suptitle('Aggregate Metrics Over Time (All Campaigns)', fontsize=16)
+        axs = axs.flatten()
+        
+        metric_names = ['regret', 'cpa', 'total_conversions', 'pacing_error', 'cap_violations']
+        metric_titles = ['Regret (Mean)', 'CPA (Weighted)', 'Total Conversions (Sum)', 'Pacing Error (Mean)', 'Cap Violations (Count)']
+        
+        for i, (metric_name, title) in enumerate(zip(metric_names, metric_titles)):
+            ax = axs[i]
+            ax.set_title(title)
+            ax.grid(True, alpha=0.3)
+            ax.set_xlabel('Time (hours)')
+            ax.set_ylabel(title)
+            
+            if metric_name in self.aggregate_metrics_history and len(self.aggregate_metrics_history[metric_name]) > 0:
+                # Skip first data point (t=0)
+                ax.plot(self.time[1:], self.aggregate_metrics_history[metric_name], marker='o', color='darkblue', linewidth=2, markersize=4)
+        
+        # Hide the last unused subplot
+        axs[5].axis('off')
         
         plt.tight_layout()
         plt.show()
@@ -310,14 +542,19 @@ def run_simulation(
     print("--------------------------------")
 
     for hour in range(simulation_hours):
-        spend_allocation: Dict[str, Tuple[float, float, float]] = allocator.allocate_hour(campaign_states)
+        # Get scores first for cap violation tracking
+        scores = allocator.get_scores(campaign_states)
+        spend_allocation: Dict[str, Tuple[float, float, float]] = allocator.allocate_spend_weighted_round_robin(scores)
+        allocator.reduce_current_daily_budget(spend_allocation)
+        
         for state in campaign_states:
             state.simulate_next_hour(spend_allocation[state.campaign_id][0])
 
         if hour % 24 == 0:
             allocator.restart_day()
-    
-        plotter.add_data_points(campaign_states)
+
+        metrics = SimulatorMetrics.calculate_metrics(campaign_states, spend_allocation, scores)
+        plotter.add_data_points(campaign_states, metrics)
 
     plotter.show()
 

@@ -12,6 +12,10 @@ Although the full system involves many interacting variables (conversion varianc
 
 ---
 
+## What do we measure?
+
+All campaigns belong to the same product, we want to maximize the sales with different strategies
+
 ## Metrics
 
 | Metric | Description |
@@ -50,3 +54,16 @@ TBC
 - The inner empiric campaign in real life can vary over time so results are highly dependant on the knowledge of how that works
 - we assume conversions are immediate for the scope of this project
 - Be careful with the beta and alfa, long running campaigns need to keep a window over the clicks / conversions 
+
+- Primitive obsession: one of the problem of the solution delivered is that it passes a lot of unkown (list, float float) through parameters which reduces readability
+
+
+
+
+1. create metrics for all campagins and each campaign
+
+2. create a metric average of running that execution n times
+
+3. create a system that executes all different budgets / allocators and creates a plot that compares those
+
+4. assume inner state
