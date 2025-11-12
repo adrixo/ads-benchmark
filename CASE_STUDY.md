@@ -39,6 +39,8 @@ To ensure reproducibility, we **separate campaign simulation from estimation**:
 - **Estimator / allocator:**  
   Observes only simulated data and decides hourly spend for the next period.
 
+To have enough samples on same algorithm we compare 1 vs N attems over the same algorithm and obtain the last metrics as mean
+
 ### Algorithms & Method
 
 TBC
