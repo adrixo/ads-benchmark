@@ -175,15 +175,30 @@ class BudgetAllocator:
         scored = scores
         hourly_budget = self.cfg.daily_budget / 24
         remaining = hourly_budget
+        
+        # Check if all scores are 0 (all campaigns violate caps)
+        total_score = sum(score for _, score, _, _ in scored)
+        if total_score < 1e-8:
+            # Distribute equally if all scores are 0
+            equal_share = hourly_budget / len(scored) if scored else 0.0
+            return {cid: equal_share for cid, _, _, _ in scored}
 
         i = 0
-        while remaining > 1e-6 and i < len(scored):
+        max_iterations = len(scored) * 1000  # Safety limit to prevent infinite loops
+        iterations = 0
+        
+        while remaining > 1e-6 and i < len(scored) and iterations < max_iterations:
             name, score, _, _ = scored[i]
-            chunk = min(remaining, max(10.0, 0.2 * hourly_budget))
-            amt = chunk * score / max(1e-8, score)
-            allocations[name] = allocations.get(name, 0.0) + amt
-            remaining -= amt
+            
+            # Skip campaigns with score = 0
+            if score > 1e-8:
+                chunk = min(remaining, max(10.0, 0.2 * hourly_budget))
+                amt = chunk * score / max(1e-8, score)
+                allocations[name] = allocations.get(name, 0.0) + amt
+                remaining -= amt
+            
             i += 1
+            iterations += 1
             if i == len(scored):
                 i = 0
 
@@ -680,12 +695,18 @@ def run_single_simulation(
 
 def run_simulation(
         simulation_hours: int = 48,
+        num_runs: int = 500
 ):
     """
     Run simulations comparing all 4 allocation algorithms.
+    Each algorithm is run multiple times and results are averaged for accuracy.
+    
+    Args:
+        simulation_hours: Number of hours to simulate per run
+        num_runs: Number of times to run each algorithm (default: 20)
     """
     print("\n" + "="*80)
-    print("RUNNING COMPARISON OF 4 ALLOCATION ALGORITHMS")
+    print(f"RUNNING COMPARISON OF 4 ALLOCATION ALGORITHMS ({num_runs} runs each)")
     print("="*80)
     
     sample_data_adapter = SampleDataAdapter()
@@ -707,58 +728,78 @@ def run_simulation(
         'UCB Optimal': temp_allocator.allocate_spend_ucb_optimal
     }
     
-    # Store results for each method
-    all_results: Dict[str, Tuple[Dict[str, Dict[str, float]], Dict[str, float]]] = {}
+    # Store averaged results for each method
+    all_results: Dict[str, Dict[str, float]] = {}
     
-    # Run simulation for each allocation method
+    # Run simulation for each allocation method multiple times
     for method_name, allocation_func in allocation_methods.items():
-        print(f"Running simulation with: {method_name}")
+        print(f"Running {num_runs} simulations with: {method_name}")
         print("-" * 80)
         
-        final_per_campaign, final_aggregate = run_single_simulation(
-            simulation_hours=simulation_hours,
-            allocation_method=method_name,
-            allocation_func=allocation_func,
-            initial_campaign_states=initial_campaign_states,
-            allocator_cfg=allocator_cfg
-        )
+        # Accumulate metrics across all runs
+        accumulated_metrics: Dict[str, float] = {}
         
-        all_results[method_name] = (final_per_campaign, final_aggregate)
+        for run in range(num_runs):
+            # Show progress for every run
+            print(f"  Run {run + 1}/{num_runs}...", end='\r')
+            
+            final_per_campaign, final_aggregate = run_single_simulation(
+                simulation_hours=simulation_hours,
+                allocation_method=method_name,
+                allocation_func=allocation_func,
+                initial_campaign_states=initial_campaign_states,
+                allocator_cfg=allocator_cfg
+            )
+            
+            # Accumulate aggregate metrics
+            for metric_name, metric_value in final_aggregate.items():
+                if metric_name not in accumulated_metrics:
+                    accumulated_metrics[metric_name] = 0.0
+                accumulated_metrics[metric_name] += metric_value
+        
+        # Calculate average metrics
+        averaged_metrics = {
+            metric_name: metric_value / num_runs 
+            for metric_name, metric_value in accumulated_metrics.items()
+        }
+        
+        all_results[method_name] = averaged_metrics
         
         # Print summary for this method
-        print(f"Results summary:")
-        print(f"  Total Conversions: {final_aggregate['total_conversions']:.2f}")
-        print(f"  Average CPA: {final_aggregate['cpa']:.2f}")
-        print(f"  Average Regret: {final_aggregate['regret']:.2f}")
-        print(f"  Cap Violations: {final_aggregate['cap_violations']:.0f}")
+        print(f"  ✓ Completed all {num_runs} runs" + " " * 20)  # Clear the line
+        print(f"Average results across {num_runs} runs:")
+        print(f"  Total Conversions: {averaged_metrics['total_conversions']:.2f}")
+        print(f"  Average CPA: {averaged_metrics['cpa']:.2f}")
+        print(f"  Average Regret: {averaged_metrics['regret']:.2f}")
+        print(f"  Cap Violations: {averaged_metrics['cap_violations']:.2f}")
         print()
     
     # Print comparison table
     print("\n" + "="*80)
-    print("FINAL COMPARISON OF ALL ALGORITHMS")
+    print(f"FINAL COMPARISON OF ALL ALGORITHMS (averaged over {num_runs} runs)")
     print("(regret & cpa: averaged | total_conversions & cap_violations: summed)")
     print("="*80 + "\n")
     
     # Create comparison DataFrame
-    comparison_data = {}
-    for method_name, (_, aggregate) in all_results.items():
-        comparison_data[method_name] = aggregate
-    
-    comparison_df = pd.DataFrame(comparison_data).T
+    comparison_df = pd.DataFrame(all_results).T
     comparison_df.index.name = 'Algorithm'
     print(comparison_df.to_string())
     print("\n" + "="*80)
     
     # Visualize comparison
-    visualize_algorithm_comparison(comparison_df)
+    visualize_algorithm_comparison(comparison_df, num_runs)
 
 
-def visualize_algorithm_comparison(comparison_df: pd.DataFrame):
+def visualize_algorithm_comparison(comparison_df: pd.DataFrame, num_runs: int = 20):
     """
     Create visualization comparing all allocation algorithms.
+    
+    Args:
+        comparison_df: DataFrame with comparison metrics
+        num_runs: Number of runs averaged for the results
     """
     fig, axs = plt.subplots(2, 2, figsize=(14, 10))
-    fig.suptitle('Allocation Algorithm Comparison', fontsize=16, fontweight='bold')
+    fig.suptitle(f'Allocation Algorithm Comparison (averaged over {num_runs} runs)', fontsize=16, fontweight='bold')
     axs = axs.flatten()
     
     metrics = ['regret', 'cpa', 'total_conversions', 'cap_violations']
