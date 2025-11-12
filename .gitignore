@@ -143,10 +143,4 @@ cython_debug/
 *~
 .DS_Store
 
-# Project-specific
-*.png
-*.jpg
-*.jpeg
-*.gif
-*.pdf
 
