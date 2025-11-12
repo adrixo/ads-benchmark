@@ -202,22 +202,16 @@ class Metric:
     @staticmethod
     def regret(allocated_spend: Tuple[float, float, float], campaign: CampaignState) -> float:
         """
-        Measures opportunity cost: theoretical best conversions - actual conversions.
-        Uses the sampled CPA from allocation to estimate what could have been achieved.
+        Measures regret: the difference between actual CPA and sampled CPA.
+        If actual CPA is higher than sampled CPA, there's regret (we're paying more than expected).
         """
-        spend_amount, sampled_cpa, _ = allocated_spend
+        _, sampled_cpa, _ = allocated_spend
         
-        # Theoretical conversions if we had perfect information
-        if sampled_cpa > 0:
-            theoretical_conversions = spend_amount / sampled_cpa
-        else:
-            theoretical_conversions = 0.0
+        # Actual CPA achieved
+        actual_cpa = campaign.cpa
         
-        # Actual conversions achieved
-        actual_conversions = campaign.cum_conversions
-        
-        # Regret is the missed opportunity (lower is better)
-        return max(0.0, theoretical_conversions - actual_conversions)
+        # Regret is the absolute difference between actual and expected CPA
+        return abs(actual_cpa - sampled_cpa)
     
     @staticmethod
     def cpa(allocated_spend: Tuple[float, float, float], campaign: CampaignState) -> float:
@@ -228,23 +222,6 @@ class Metric:
     def total_conversions(allocated_spend: Tuple[float, float, float], campaign: CampaignState) -> float:
         """Returns the total cumulative conversions achieved."""
         return float(campaign.cum_conversions)
-    
-    @staticmethod
-    def pacing_error(allocated_spend: Tuple[float, float, float], campaign: CampaignState) -> float:
-        """
-        Measures deviation from ideal even pacing of spend.
-        Returns absolute deviation from expected spend at this point.
-        """
-        spend_amount, _, _ = allocated_spend
-        
-        # If we have cumulative spend allocated, we can measure pacing
-        if campaign.cum_spend_allocated > 0:
-            # Simplified: large deviations in hour-to-hour allocation indicate poor pacing
-            avg_hourly_spend = campaign.cum_spend_allocated / max(1, campaign.cum_clicks // 10 + 1)
-            deviation = abs(spend_amount - avg_hourly_spend)
-            return deviation
-        
-        return 0.0
     
     @staticmethod
     def cap_violations(allocated_spend: Tuple[float, float, float], campaign: CampaignState) -> float:
@@ -280,7 +257,6 @@ class SimulatorMetrics:
                         'regret': float,
                         'cpa': float,
                         'total_conversions': float,
-                        'pacing_error': float,
                         'cap_violations': float
                     },
                     ...
@@ -289,7 +265,6 @@ class SimulatorMetrics:
                     'regret': float (mean),
                     'cpa': float (weighted by total spend/conversions),
                     'total_conversions': float (sum),
-                    'pacing_error': float (budget pacing error),
                     'cap_violations': float (count of campaigns with score=0)
                 }
             }
@@ -307,14 +282,12 @@ class SimulatorMetrics:
             campaign_regret = Metric.regret(allocation, campaign)
             campaign_cpa = Metric.cpa(allocation, campaign)
             campaign_conversions = Metric.total_conversions(allocation, campaign)
-            campaign_pacing = Metric.pacing_error(allocation, campaign)
             campaign_cap_violation = Metric.cap_violations(allocation, campaign)
             
             per_campaign_metrics[campaign.campaign_id] = {
                 'regret': campaign_regret,
                 'cpa': campaign_cpa,
                 'total_conversions': campaign_conversions,
-                'pacing_error': campaign_pacing,
                 'cap_violations': campaign_cap_violation
             }
             
@@ -337,11 +310,6 @@ class SimulatorMetrics:
         
         # Total conversions: sum of all conversions
         aggregate_metrics['total_conversions'] = total_conversions_sum
-        
-        # Pacing error: for budget pacing, calculate deviation from ideal even pacing
-        # Ideal: each campaign should spend evenly over time
-        pacing_errors = [m['pacing_error'] for m in per_campaign_metrics.values()]
-        aggregate_metrics['pacing_error'] = float(np.mean(pacing_errors)) if pacing_errors else 0.0
         
         # Cap violations: count how many campaigns have score=0 (removed due to cap)
         if scores is not None:
@@ -418,7 +386,7 @@ class Plotter:
             # Per-campaign metrics
             for campaign_id, campaign_metrics in metrics_data.get('per_campaign', {}).items():
                 if campaign_id not in self.metrics_history:
-                    self.metrics_history[campaign_id] = {k: [] for k in ['regret', 'cpa', 'total_conversions', 'pacing_error', 'cap_violations']}
+                    self.metrics_history[campaign_id] = {k: [] for k in ['regret', 'cpa', 'total_conversions', 'cap_violations']}
                 for metric_name, metric_value in campaign_metrics.items():
                     self.metrics_history[campaign_id][metric_name].append(metric_value)
             
@@ -468,12 +436,12 @@ class Plotter:
         if not self.metrics_history:
             return
         
-        fig, axs = plt.subplots(3, 2, figsize=(14, 12))
+        fig, axs = plt.subplots(2, 2, figsize=(14, 10))
         fig.suptitle('Per-Campaign Metrics Over Time', fontsize=16)
         axs = axs.flatten()
         
-        metric_names = ['regret', 'cpa', 'total_conversions', 'pacing_error', 'cap_violations']
-        metric_titles = ['Regret', 'CPA', 'Total Conversions', 'Pacing Error', 'Cap Violations']
+        metric_names = ['regret', 'cpa', 'total_conversions', 'cap_violations']
+        metric_titles = ['Regret', 'CPA', 'Total Conversions', 'Cap Violations']
         
         for i, (metric_name, title) in enumerate(zip(metric_names, metric_titles)):
             ax = axs[i]
@@ -489,9 +457,6 @@ class Plotter:
             
             ax.legend()
         
-        # Hide the last unused subplot
-        axs[5].axis('off')
-        
         plt.tight_layout()
         plt.show()
     
@@ -500,12 +465,12 @@ class Plotter:
         if not self.aggregate_metrics_history:
             return
         
-        fig, axs = plt.subplots(3, 2, figsize=(14, 12))
+        fig, axs = plt.subplots(2, 2, figsize=(14, 10))
         fig.suptitle('Aggregate Metrics Over Time (All Campaigns)', fontsize=16)
         axs = axs.flatten()
         
-        metric_names = ['regret', 'cpa', 'total_conversions', 'pacing_error', 'cap_violations']
-        metric_titles = ['Regret (Mean)', 'CPA (Weighted)', 'Total Conversions (Sum)', 'Pacing Error (Mean)', 'Cap Violations (Count)']
+        metric_names = ['regret', 'cpa', 'total_conversions', 'cap_violations']
+        metric_titles = ['Regret (Mean)', 'CPA (Weighted)', 'Total Conversions (Sum)', 'Cap Violations (Count)']
         
         for i, (metric_name, title) in enumerate(zip(metric_names, metric_titles)):
             ax = axs[i]
@@ -517,9 +482,6 @@ class Plotter:
             if metric_name in self.aggregate_metrics_history and len(self.aggregate_metrics_history[metric_name]) > 0:
                 # Skip first data point (t=0)
                 ax.plot(self.time[1:], self.aggregate_metrics_history[metric_name], marker='o', color='darkblue', linewidth=2, markersize=4)
-        
-        # Hide the last unused subplot
-        axs[5].axis('off')
         
         plt.tight_layout()
         plt.show()
