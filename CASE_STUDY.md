@@ -23,13 +23,14 @@ All campaigns belong to the same product, we want to maximize the sales with dif
 | **Regret** | Lost conversions vs. optimal allocation |
 | **CPA (Cost per Acquisition)** | Cost per conversion achieved |
 | **Total conversions** | Overall campaign performance |
-| **Pacing error** | Deviation from planned hourly budget |
+| **Cap violations** | Number of times avoid to invest |
 
 **Others to explore (out of scope for now):**
 - Volatility  
 - Exploration share  
 - Final profit  
-- Cap violations  
+- False positive cap violations
+- Pacing error
 
 ---
 
@@ -47,23 +48,31 @@ To have enough samples on same algorithm we compare 1 vs N attems over the same 
 
 ### Algorithms & Method
 
-TBC
+**Tested Combinations** (8 total = 2 scoring × 4 allocation):
+
+**Scoring Methods**:
+1. **Bayesian**: Samples CVR from Beta(α,β) distribution → derives CPA. Accounts for uncertainty.
+2. **Baseline**: Samples CPA from Normal(μ, 0.5σ). Simple noise around historical CPA.
+
+**Allocation Methods**:
+1. **Square Normalization**: allocation ∝ score³ (aggressive - favors winners heavily)
+2. **Simple Normalization**: allocation ∝ score (proportional distribution)
+3. **Weighted Round Robin**: Iterative chunk allocation (ensures all get chances)
+4. **Softmax Exploration**: Softmax on (score + exploration_bonus) (balances exploit/explore)
+
+**Robustness**: Each combination runs **500 times** with different random seeds. Results are averaged to eliminate noise and ensure statistical validity. Each campaign HAS NOT A COMMON TRUE CPC/CVR that generates actual clicks/conversions. (required following steps)
+
+**Simulation Setup**: The allocator only sees historical data and must estimate future performance.
+
+# Results
+
+
 
 # Limitations
 
-- The inner empiric campaign in real life can vary over time so results are highly dependant on the knowledge of how that works
+- **The inner empiric campaign in real life can vary over time so results are highly dependant on the knowledge of how that works** 
 - we assume conversions are immediate for the scope of this project
 - Be careful with the beta and alfa, long running campaigns need to keep a window over the clicks / conversions 
 
-- Primitive obsession: one of the problem of the solution delivered is that it passes a lot of unkown (list, float float) through parameters which reduces readability
-
-
-
-
-1. create metrics for all campagins and each campaign
-
-2. create a metric average of running that execution n times
-
-3. create a system that executes all different budgets / allocators and creates a plot that compares those
-
-4. assume inner state
+- Primitive obsession: one of the problem of the solution delivered is that it passes a lot of unkown (list, float float) through parameters which reduces readability.
+    - despite is better to have it sofly typed to ease usage of LLM
