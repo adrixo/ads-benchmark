@@ -66,6 +66,38 @@ To have enough samples on same algorithm we compare 1 vs N attems over the same 
 
 # Results
 
+## Algorithm Comparison (500 runs per combination)
+
+Final benchmark comparing 2 scoring methods × 4 allocation methods across 500 independent runs each. Results show average performance metrics with best performers highlighted.
+
+![Algorithm Comparison](simulation_500n.png)
+
+**Key Findings**: The visualization shows which combination of scoring and allocation method achieves:
+- Lowest regret (better predictions)
+- Lowest CPA (cheaper acquisitions) 
+- Highest total conversions (best performance)
+- Fewest cap violations (more campaigns viable)
+
+Green borders indicate the winning method for each metric.
+
+---
+
+## Per-Campaign Metrics Over Time
+
+
+![Per-Campaign Metrics](metrics_per_campaign.png)
+
+---
+
+## Single Campaign Example (Square Normalization)
+
+
+![Single Campaign](simulation_squ.jpeg)
+![Aggregate Metrics](metrics_per_campaign.png)
+![Aggregate Metrics](metrics_aggr.png)
+
+
+---
 
 
 # Limitations
