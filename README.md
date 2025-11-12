@@ -91,7 +91,7 @@ Final benchmark comparing 2 scoring methods × 4 allocation methods across 500 i
 
 # Limitations
 
-- **The inner empiric campaign in real life can vary over time so results are highly dependant on the knowledge of how that works** 
+- **The inner empiric campaign in real life can vary over time so results are highly dependant on the knowledge of how that works** A following step is to force each individual campaign to have same inner CVR and CPC on each hour
 - we assume conversions are immediate for the scope of this project
 - Be careful with the beta and alfa, long running campaigns need to keep a window over the clicks / conversions 
 
