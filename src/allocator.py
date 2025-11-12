@@ -8,7 +8,7 @@ from matplotlib import pyplot as plt
 @dataclass
 class CampaignConfig:
     campaign_id: str
-    cpa_cap: float = 50
+    cpa_cap: float = 100
     prior_alpha: float = 2.0
     prior_beta: float = 98.0
     prior_cpc: float = 2.0
@@ -106,7 +106,7 @@ class BudgetAllocator:
         allocated_spend = {}
 
         scores = self.get_scores(campaign_states)
-        allocated_spend = self.allocate_spend_square_normalization(scores)
+        allocated_spend = self.allocate_spend_weighted_round_robin(scores)
 
         self.reduce_current_daily_budget(allocated_spend)
 
@@ -193,6 +193,28 @@ class BudgetAllocator:
 
     def restart_day(self):
         self.cfg.current_daily_budget = self.cfg.daily_budget
+
+
+class Metric:
+    @staticmethod
+    def regret(self, allocated_spend: Dict[str, Tuple[float, float, float]], campaign: CampaignState) -> float:
+        return 0.0
+    
+    @staticmethod
+    def cpa(self, allocated_spend: Dict[str, Tuple[float, float, float]], campaign: CampaignState) -> float:
+        return 0.0
+    
+    @staticmethod
+    def total_conversions(self, allocated_spend: Dict[str, Tuple[float, float, float]], campaign: CampaignState) -> float:
+        return 0.0
+    
+    @staticmethod
+    def pacing_error(self, allocated_spend: Dict[str, Tuple[float, float, float]], campaign: CampaignState) -> float:
+        return 0.0
+
+    @staticmethod
+    def cap_violations(self, allocated_spend: Dict[str, Tuple[float, float, float]], campaign: CampaignState) -> float:
+        return 0.0
 
 
 class SampleDataAdapter:

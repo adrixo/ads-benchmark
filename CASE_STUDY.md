@@ -49,3 +49,4 @@ TBC
 
 - The inner empiric campaign in real life can vary over time so results are highly dependant on the knowledge of how that works
 - we assume conversions are immediate for the scope of this project
+- Be careful with the beta and alfa, long running campaigns need to keep a window over the clicks / conversions 
